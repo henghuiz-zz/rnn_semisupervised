@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
-from tensorflow.examples.tutorials.mnist import input_data
+import pickle
+from input_pipeline import unsupervised_batch
 
 
 def encoder_model(input_x, hidden_unit, sequence_length, scope='enc'):
@@ -61,8 +62,8 @@ if __name__ == '__main__':
     seq_len = 28
     input_dim = 28
     num_class = 10
-    mnist = input_data.read_data_sets("MNIST_data/", one_hot=False,
-                                      reshape=False)
+    load_dict = pickle.load(open('data/semi_supervised.p', 'rb'))
+    train_x, test_x = load_dict['x_unlabelled'], load_dict['x_test']
 
     with tf.Graph().as_default(), tf.Session() as sess:
         model = AutoEncoderModel(seq_len + 2, input_dim + 2, embed_dim=256)
@@ -74,51 +75,30 @@ if __name__ == '__main__':
 
             train_loss = []
 
-            for iter_id in range(100):
-                batch_xs, _ = mnist.train.next_batch(600)
-                batch_xs = batch_xs[:, :, :, 0]
-
-                xs = np.zeros([600, seq_len+2, input_dim+2])
-                xs[:, 1:-1, 2:] = batch_xs
-                xs[:, 0, 0] = 1
-                xs[:, -1, 1] = 1
-
-                ls = (seq_len + 2) * np.ones([600])
-                ms = (input_dim + 2) * np.ones([600, seq_len+2])
-
+            for batch_x, batch_l, batch_m in unsupervised_batch(50, train_x):
                 loss_ins, _ = sess.run(
                     [model.loss, model.train_step],
                     feed_dict={
-                        model.input_x: xs,
-                        model.input_l: ls,
-                        model.input_m: ms,
+                        model.input_x: batch_x,
+                        model.input_l: batch_l,
+                        model.input_m: batch_m,
                         model.train_stepsize: step_size
                     }
                 )
-
+                print('\r', np.mean(loss_ins), end='', flush=True)
                 train_loss.append(loss_ins)
 
-            print(epoch_id, np.mean(train_loss), end=' ')
+            print('\r', epoch_id, np.mean(train_loss), end=' ')
 
             test_loss = []
-            for iter_id in range(100):
-                batch_xs, _ = mnist.test.next_batch(100)
-                batch_xs = batch_xs[:, :, :, 0]
-
-                xs = np.zeros([100, seq_len + 2, input_dim + 2])
-                xs[:, 1:-1, 2:] = batch_xs
-                xs[:, 0, 0] = 1
-                xs[:, -1, 1] = 1
-
-                ls = (seq_len + 2) * np.ones([100])
-                ms = (input_dim + 2) * np.ones([100, seq_len + 2])
+            for batch_x, batch_l, batch_m in unsupervised_batch(500, test_x):
 
                 loss_ins = sess.run(
                     [model.loss],
                     feed_dict={
-                        model.input_x: xs,
-                        model.input_l: ls,
-                        model.input_m: ms,
+                        model.input_x: batch_x,
+                        model.input_l: batch_l,
+                        model.input_m: batch_m,
                         model.train_stepsize: step_size
                     }
                 )

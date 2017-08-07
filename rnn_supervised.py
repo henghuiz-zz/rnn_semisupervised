@@ -1,6 +1,7 @@
 import tensorflow as tf
-from tensorflow.examples.tutorials.mnist import input_data
 import numpy as np
+import pickle
+from input_pipeline import supervised_batch
 
 
 class LSTMSupervisedModel:
@@ -33,20 +34,20 @@ if __name__ == '__main__':
     seq_len = 28
     input_dim = 28
     num_class = 10
-    mnist = input_data.read_data_sets("MNIST_data/", one_hot=False,
-                                      reshape=False)
+
+    load_dict = pickle.load(open('data/semi_supervised.p', 'rb'))
+    train_x, train_y = load_dict['x_labelled'], load_dict['y_labelled']
+    test_x, test_y = load_dict['x_test'], load_dict['y_test']
 
     with tf.Graph().as_default(), tf.Session() as sess:
         model = LSTMSupervisedModel(28, 28, 10)
         sess.run(tf.global_variables_initializer())
 
-        for epoch_id in range(50):
+        for epoch_id in range(1000):
 
             train_acc = []
 
-            for iter_id in range(100):
-                batch_xs, batch_ys = mnist.train.next_batch(600)
-                batch_xs = batch_xs[:, :, :, 0]
+            for batch_xs, batch_ys in supervised_batch(100, train_x, train_y):
 
                 _, acc_ins = sess.run(
                     [model.train_op, model.accuracy],
@@ -56,13 +57,11 @@ if __name__ == '__main__':
                     }
                 )
                 train_acc += list(acc_ins)
-
             print(epoch_id, np.mean(train_acc), end=' ')
 
             test_acc = []
-            for iter_id in range(100):
-                batch_xs, batch_ys = mnist.test.next_batch(100)
-                batch_xs = batch_xs[:, :, :, 0]
+
+            for batch_xs, batch_ys in supervised_batch(100, test_x, test_y):
 
                 acc_ins = sess.run(
                     model.accuracy,
@@ -73,5 +72,4 @@ if __name__ == '__main__':
                 )
 
                 test_acc += list(acc_ins)
-
             print(np.mean(test_acc))

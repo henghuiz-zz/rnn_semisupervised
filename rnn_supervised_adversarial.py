@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import pickle
-from input_pipeline import supervised_batch
+from input_pipeline import semisupervised_batch
 
 
 def _scale_l2(x, norm_length):
@@ -12,13 +12,14 @@ def _scale_l2(x, norm_length):
     return norm_length * x_unit
 
 
-def rnn_loss(x, y, hidden_size, num_class, scope='RNN', reuse=False):
+def rnn_loss(x, y, hidden_size, num_class, scope='rnn', reuse=False):
     with tf.variable_scope(scope, reuse=reuse):
         rnn_cell = tf.nn.rnn_cell.GRUCell(hidden_size)
         rnn_cell = tf.nn.rnn_cell.DropoutWrapper(rnn_cell, state_keep_prob=0.7)
 
         _, rnn_output = tf.nn.dynamic_rnn(
             rnn_cell, x, dtype=tf.float32, scope='RNN')
+    with tf.variable_scope('fc', reuse=reuse):
         logit = tf.layers.dense(rnn_output, units=num_class, name='fc1',
                                 activation=None)
 
@@ -66,20 +67,29 @@ if __name__ == '__main__':
     train_x, train_y = load_dict['x_labelled'], load_dict['y_labelled']
     test_x, test_y = load_dict['x_test'], load_dict['y_test']
 
+    save_path = 'model_ck/rnn_ck/'
+
     with tf.Graph().as_default(), tf.Session() as sess:
-        model = LSTMSupervisedModel(28, 28, 10)
+        model = LSTMSupervisedModel(28, 28+2, 10)
+        rnn_variable = tf.get_collection(
+            tf.GraphKeys.TRAINABLE_VARIABLES, 'rnn')
+
+        rnn_variable_saver = tf.train.Saver(rnn_variable)
         sess.run(tf.global_variables_initializer())
 
+        ck_state = tf.train.get_checkpoint_state(save_path)
+        rnn_variable_saver.restore(sess, ck_state.model_checkpoint_path)
+
         for epoch_id in range(10000):
-            perturb_norm_length = 3
+            perturb_norm_length = 0.5
 
             train_acc = []
 
-            for batch_xs, batch_ys in supervised_batch(500, train_x, train_y):
+            for batch_xs, batch_ys, _, _ in semisupervised_batch(500, train_x, train_y):
                 _, acc_ins = sess.run(
                     [model.train_op, model.accuracy],
                     feed_dict={
-                        model.input_x: batch_xs,
+                        model.input_x: batch_xs[:, 1:-1, :],
                         model.input_y: batch_ys,
                         model.perturb_norm_length: perturb_norm_length
                     }
@@ -89,11 +99,11 @@ if __name__ == '__main__':
 
             test_acc = []
 
-            for batch_xs, batch_ys in supervised_batch(1000, test_x, test_y):
+            for batch_xs, batch_ys, _, _ in semisupervised_batch(1000, test_x, test_y):
                 acc_ins = sess.run(
                     model.accuracy,
                     feed_dict={
-                        model.input_x: batch_xs,
+                        model.input_x: batch_xs[:, 1:-1, :],
                         model.input_y: batch_ys
                     }
                 )

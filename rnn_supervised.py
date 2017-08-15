@@ -11,7 +11,7 @@ class LSTMSupervisedModel:
         self.input_y = tf.placeholder(tf.int64, [None])
 
         rnn_cell = tf.nn.rnn_cell.GRUCell(hidden_size)
-        rnn_cell = tf.nn.rnn_cell.DropoutWrapper(rnn_cell, state_keep_prob=0.7)
+        rnn_cell = tf.nn.rnn_cell.DropoutWrapper(rnn_cell, state_keep_prob=0.9)
 
         _, rnn_output = tf.nn.dynamic_rnn(rnn_cell, self.input_x,
                                           dtype=tf.float32)
@@ -43,7 +43,7 @@ if __name__ == '__main__':
         model = LSTMSupervisedModel(28, 28, 10)
         sess.run(tf.global_variables_initializer())
 
-        for epoch_id in range(1000):
+        for epoch_id in range(10000):
 
             train_acc = []
 
@@ -57,19 +57,20 @@ if __name__ == '__main__':
                     }
                 )
                 train_acc += list(acc_ins)
-            print(epoch_id, np.mean(train_acc), end=' ')
+            print('\r', epoch_id, 'train', np.mean(train_acc), end='', flush=True)
 
-            test_acc = []
+            if epoch_id % 200 == 0:
+                test_acc = []
 
-            for batch_xs, batch_ys in supervised_batch(100, test_x, test_y):
+                for batch_xs, batch_ys in supervised_batch(100, test_x, test_y):
 
-                acc_ins = sess.run(
-                    model.accuracy,
-                    feed_dict={
-                        model.input_x: batch_xs,
-                        model.input_y: batch_ys
-                    }
-                )
+                    acc_ins = sess.run(
+                        model.accuracy,
+                        feed_dict={
+                            model.input_x: batch_xs,
+                            model.input_y: batch_ys
+                        }
+                    )
 
-                test_acc += list(acc_ins)
-            print(np.mean(test_acc))
+                    test_acc += list(acc_ins)
+                print('\r', epoch_id, 'train', np.mean(train_acc), 'test', np.mean(test_acc))

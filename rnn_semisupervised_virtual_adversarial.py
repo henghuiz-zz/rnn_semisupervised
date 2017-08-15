@@ -24,7 +24,7 @@ class LSTMSupervisedModel:
                  learning_rate=1e-3,
                  num_power_iteration=1,
                  small_constant_for_finite_diff=0.1,
-                 perturb_norm_length=5):
+                 perturb_norm_length=1):
         self.input_x = tf.placeholder(tf.float32, [None, seq_len, input_dim])
         self.input_y = tf.placeholder(tf.int64, [None])
 
@@ -49,15 +49,21 @@ class LSTMSupervisedModel:
         perturb = _scale_l2(d, perturb_norm_length)
         vadv_logits = rnn_loss(
                 self.input_x + perturb, hidden_size, num_class, reuse=True)
-        loss_2 = _kl_divergence_with_logits(logits, vadv_logits, num_class)
+        self.uns_loss = _kl_divergence_with_logits(logits, vadv_logits, num_class)
 
-        self.loss = loss_1 + loss_2
+        self.sup_loss = loss_1 + 0.5*self.uns_loss
 
-        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-        gvs = optimizer.compute_gradients(self.loss)
-        capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in
-                      gvs]
-        self.train_op = optimizer.apply_gradients(capped_gvs)
+        sup_opt = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        sup_gvs = sup_opt.compute_gradients(self.sup_loss)
+        sup_capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in
+                      sup_gvs]
+        self.sup_train_op = sup_opt.apply_gradients(sup_capped_gvs)
+
+        uns_optimizer = tf.train.AdamOptimizer(learning_rate=0.5*learning_rate)
+        uns_gvs = uns_optimizer.compute_gradients(self.uns_loss)
+        uns_capped_gvs = [(tf.clip_by_value(grad, -1., 1.), var) for grad, var in
+                      uns_gvs]
+        self.uns_train_op = uns_optimizer.apply_gradients(uns_capped_gvs)
 
 
 if __name__ == '__main__':
@@ -66,44 +72,49 @@ if __name__ == '__main__':
     num_class = 10
 
     load_dict = pickle.load(open('data/semi_supervised.p', 'rb'))
-    train_x, train_y = load_dict['x_labelled'], load_dict['y_labelled']
-    test_x, test_y = load_dict['x_test'], load_dict['y_test']
+    unlabelled_x, labelled_x, test_x = load_dict['x_unlabelled'], load_dict['x_labelled'], load_dict['x_test']
+    labelled_y, test_y = load_dict['y_labelled'], load_dict['y_test']
 
     save_path = 'model_ck/rnn_ck/'
 
     with tf.Graph().as_default(), tf.Session() as sess:
-        model = LSTMSupervisedModel(28, 28+2, 10)
-        # rnn_variable = tf.get_collection(
-        #     tf.GraphKeys.TRAINABLE_VARIABLES, 'rnn')
-
-        # rnn_variable_saver = tf.train.Saver(rnn_variable)
+        model = LSTMSupervisedModel(28, 28, 10)
         sess.run(tf.global_variables_initializer())
-
-        # ck_state = tf.train.get_checkpoint_state(save_path)
-        # rnn_variable_saver.restore(sess, ck_state.model_checkpoint_path)
 
         for epoch_id in range(10000):
             train_acc = []
 
-            for batch_xs, batch_ys, _, _ in semisupervised_batch(16, train_x, train_y):
+            for batch_xs, batch_ys, _, _ in semisupervised_batch(100, labelled_x, labelled_y):
                 _, acc_ins = sess.run(
-                    [model.train_op, model.accuracy],
+                    [model.sup_train_op, model.accuracy],
                     feed_dict={
-                        model.input_x: batch_xs[:, 1:-1, :],
+                        model.input_x: batch_xs[:, 1:-1, 1:-1],
                         model.input_y: batch_ys
                     }
                 )
                 train_acc += list(acc_ins)
+            # pick a batch of unlabbel example
+
+            for _ in range(2):
+                id_selected = np.random.choice(len(unlabelled_x), size=500)
+
+                _ = sess.run(
+                    model.uns_train_op,
+                    feed_dict={
+                        model.input_x: unlabelled_x[id_selected, :, :],
+                    }
+                )
+
             print('\r', epoch_id, 'train', np.mean(train_acc), end='', flush=True)
 
-            if epoch_id % 200 == 0:
+            if epoch_id % 20 == 0:
                 test_acc = []
 
                 for batch_xs, batch_ys, _, _ in semisupervised_batch(1000, test_x, test_y):
                     acc_ins = sess.run(
                         model.accuracy,
                         feed_dict={
-                            model.input_x: batch_xs[:, 1:-1, :],
+                            model.input_x: batch_xs[:, 1:-1, 1:-1],
                             model.input_y: batch_ys
                         }
                     )

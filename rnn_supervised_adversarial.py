@@ -8,7 +8,7 @@ from util import _scale_l2
 def rnn_loss(x, y, hidden_size, num_class, scope='rnn', reuse=False):
     with tf.variable_scope(scope, reuse=reuse):
         rnn_cell = tf.nn.rnn_cell.GRUCell(hidden_size)
-        rnn_cell = tf.nn.rnn_cell.DropoutWrapper(rnn_cell, state_keep_prob=0.7)
+        rnn_cell = tf.nn.rnn_cell.DropoutWrapper(rnn_cell, state_keep_prob=0.9)
 
         _, rnn_output = tf.nn.dynamic_rnn(
             rnn_cell, x, dtype=tf.float32, scope='RNN')
@@ -64,17 +64,17 @@ if __name__ == '__main__':
 
     with tf.Graph().as_default(), tf.Session() as sess:
         model = LSTMSupervisedModel(28, 28+2, 10)
-        rnn_variable = tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, 'rnn')
-
-        rnn_variable_saver = tf.train.Saver(rnn_variable)
+        # rnn_variable = tf.get_collection(
+        #     tf.GraphKeys.TRAINABLE_VARIABLES, 'rnn')
+        #
+        # rnn_variable_saver = tf.train.Saver(rnn_variable)
         sess.run(tf.global_variables_initializer())
 
-        ck_state = tf.train.get_checkpoint_state(save_path)
-        rnn_variable_saver.restore(sess, ck_state.model_checkpoint_path)
+        # ck_state = tf.train.get_checkpoint_state(save_path)
+        # rnn_variable_saver.restore(sess, ck_state.model_checkpoint_path)
 
         for epoch_id in range(10000):
-            perturb_norm_length = 0.5
+            perturb_norm_length = 5
 
             train_acc = []
 
@@ -88,20 +88,19 @@ if __name__ == '__main__':
                     }
                 )
                 train_acc += list(acc_ins)
+            print('\r', epoch_id, 'train', np.mean(train_acc), end='', flush=True)
 
+            if epoch_id % 200 == 0:
+                test_acc = []
 
-            test_acc = []
+                for batch_xs, batch_ys, _, _ in semisupervised_batch(1000, test_x, test_y):
+                    acc_ins = sess.run(
+                        model.accuracy,
+                        feed_dict={
+                            model.input_x: batch_xs[:, 1:-1, :],
+                            model.input_y: batch_ys
+                        }
+                    )
 
-            for batch_xs, batch_ys, _, _ in semisupervised_batch(1000, test_x, test_y):
-                acc_ins = sess.run(
-                    model.accuracy,
-                    feed_dict={
-                        model.input_x: batch_xs[:, 1:-1, :],
-                        model.input_y: batch_ys
-                    }
-                )
-
-                test_acc += list(acc_ins)
-
-            print('\r', epoch_id, np.mean(train_acc),
-                  np.mean(test_acc), end='', flush=True)
+                    test_acc += list(acc_ins)
+                print('\r', epoch_id, 'train', np.mean(train_acc), 'test', np.mean(test_acc))

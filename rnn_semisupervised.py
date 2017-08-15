@@ -2,18 +2,19 @@ import tensorflow as tf
 import pickle
 import numpy as np
 
-from input_pipeline import semisupervised_batch, supervised_batch, unsupervised_batch
+from input_pipeline import semisupervised_batch, unsupervised_batch
 
 
-def classifier(input_x, sequence_length, num_class, hidden_size=256, scope='cls'):
+def classifier(input_x, sequence_length, num_class, hidden_size=128, scope='cls'):
     with tf.variable_scope(scope):
         rnn_cell = tf.nn.rnn_cell.GRUCell(hidden_size)
         rnn_cell = tf.nn.rnn_cell.DropoutWrapper(rnn_cell, state_keep_prob=0.7)
 
         _, rnn_output = tf.nn.dynamic_rnn(
-            rnn_cell, input_x, sequence_length=sequence_length, dtype=tf.float32, scope='RNN')
+            rnn_cell, input_x, sequence_length=sequence_length,
+            dtype=tf.float32, scope='RNN')
         logit = tf.layers.dense(rnn_output, units=num_class, activation=None)
-    return logit
+    return logit, rnn_output
 
 
 def encoder_model(input_x, hidden_unit, sequence_length, scope='enc'):
@@ -27,7 +28,7 @@ def encoder_model(input_x, hidden_unit, sequence_length, scope='enc'):
     return rnn_output
 
 
-def decoder_model(input_x, encode_state, hidden_unit, sequence_length,
+def decoder_model(input_x, hidden_unit, sequence_length,
                   input_dim, scope='dec'):
     with tf.variable_scope(scope):
         rnn_cell = tf.nn.rnn_cell.GRUCell(num_units=hidden_unit)
@@ -35,7 +36,7 @@ def decoder_model(input_x, encode_state, hidden_unit, sequence_length,
 
         rnn_layer, _ = tf.nn.dynamic_rnn(
             rnn_cell, input_x, sequence_length=sequence_length,
-            scope='RNN', dtype=tf.float32, initial_state=encode_state)
+            scope='RNN', dtype=tf.float32)
 
         fc1 = tf.layers.dense(rnn_layer, hidden_unit, activation=tf.nn.relu)
         output_layer = tf.layers.dense(fc1, input_dim, activation=None)
@@ -52,19 +53,19 @@ class SemisupervisedModel:
         mask = tf.expand_dims(self.input_m[:, 1:], -1)
         self.train_stepsize = tf.placeholder(tf.float32, [])
 
-        self.predict_logit = classifier(self.input_x, self.input_l, num_class)
+        self.predict_logit, self.encoded_state = classifier(
+            self.input_x, self.input_l, num_class, hidden_size=embed_dim)
         self.sup_loss = tf.losses.sparse_softmax_cross_entropy(self.input_y, self.predict_logit)
 
         broadcast_helper = tf.ones([1, sequence_length - 1], dtype=tf.float32)
-        self.context = tf.tensordot(tf.expand_dims(self.predict_logit, -1), broadcast_helper, axes=[[-1], [0]])
+        self.context = tf.tensordot(tf.expand_dims(self.encoded_state, -1), broadcast_helper, axes=[[-1], [0]])
         self.context = tf.transpose(self.context, [0, 2, 1])
 
-        self.encoded_state = encoder_model(self.input_x, embed_dim, self.input_l)
+        # self.encoded_state = encoder_model(self.input_x, embed_dim, self.input_l)
 
         decoder_input = tf.concat([self.input_x[:, :-1, :], self.context], axis=-1)
 
         self.prediction = decoder_model(decoder_input,
-                                        self.encoded_state,
                                         embed_dim,
                                         self.input_l - 1,
                                         input_dim)
@@ -73,18 +74,20 @@ class SemisupervisedModel:
                                                  self.prediction,
                                                  weights=mask)
 
-        optimizer = tf.train.AdamOptimizer(learning_rate=self.train_stepsize)
-        gvs = optimizer.compute_gradients(self.uns_loss)
-        capped_gvs = [
-            (tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
-        self.uns_train = optimizer.apply_gradients(capped_gvs)
-
-        optimizer2 = tf.train.AdamOptimizer(learning_rate=self.train_stepsize)
-        gvs2 = optimizer2.compute_gradients(self.uns_loss + self.sup_loss)
-        capped_gvs2 = [
-            (tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs2]
-        self.sup_train = optimizer.apply_gradients(capped_gvs2)
-
+        # optimizer = tf.train.AdamOptimizer(learning_rate=self.train_stepsize)
+        # gvs = optimizer.compute_gradients(self.uns_loss)
+        # capped_gvs = [
+        #     (tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs]
+        # self.uns_train = optimizer.apply_gradients(capped_gvs)
+        #
+        # optimizer2 = tf.train.AdamOptimizer(learning_rate=self.train_stepsize)
+        # gvs2 = optimizer2.compute_gradients(self.uns_loss + self.sup_loss)
+        # capped_gvs2 = [
+        #     (tf.clip_by_value(grad, -1., 1.), var) for grad, var in gvs2]
+        # self.sup_train = optimizer2.apply_gradients(capped_gvs2)
+        self.uns_train =tf.train.AdamOptimizer(learning_rate=self.train_stepsize).minimize(self.uns_loss)
+        self.sup_train = tf.train.AdamOptimizer(
+            learning_rate=self.train_stepsize).minimize(self.uns_loss + self.sup_loss)
         self.accuracy = tf.equal(self.input_y, tf.arg_max(self.predict_logit, -1))
 
 
@@ -97,17 +100,18 @@ if __name__ == '__main__':
     labelled_y, test_y = load_dict['y_labelled'], load_dict['y_test']
 
     with tf.Graph().as_default(), tf.Session() as sess:
-        model = SemisupervisedModel(seq_len + 2, input_dim + 2, 200, num_class)
+        model = SemisupervisedModel(seq_len + 2, input_dim + 2, 128, num_class)
         sess.run(tf.global_variables_initializer())
 
         for epoch_id in range(100):
-            step_size = 1e-3 if epoch_id < 50 else 1e-4
+            step_size = 1e-3 if epoch_id < 50 else 5e-4
 
             # first train on labelled data
             train_acc = []
             train_loss = []
-            for batch_x, batch_l, batch_m in unsupervised_batch(100, unlabelled_x):
-                for batch_xs, batch_ys, batch_ls, batch_ms in semisupervised_batch(100, labelled_x, labelled_y):
+            for batch_x, batch_l, batch_m in unsupervised_batch(500, unlabelled_x):
+                for batch_xs, batch_ys, batch_ls, batch_ms in semisupervised_batch(
+                        100, labelled_x, labelled_y):
                     _, acc_ins = sess.run(
                         [model.sup_train, model.accuracy],
                         feed_dict={

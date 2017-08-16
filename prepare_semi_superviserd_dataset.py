@@ -10,7 +10,7 @@ x_train = np.array(x_train) / 255
 x_test = np.array(x_test) / 255
 
 # randomly get 1,000 training example
-sss = StratifiedShuffleSplit(n_splits=1, test_size=200/60000, random_state=0)
+sss = StratifiedShuffleSplit(n_splits=1, test_size=100/60000, random_state=0)
 
 unlabel_index, label_index = sss.split(x_train, y_train).__next__()
 
